@@ -26,6 +26,8 @@ struct Vertex {
 	formulas::Vector3 col; // color r, g, b
 	formulas::Vector3 normal; // normal vector x, y, z
 	float alpha;
+	bool isOpaque;
+	float camDist;
 
 	// default constructor:
 	Vertex()
@@ -33,7 +35,9 @@ struct Vertex {
 		tex(formulas::Vector2(0.0f, 0.0f)),
 		col(formulas::Vector3(0.0f, 0.0f, 0.0f)),
 		normal(formulas::Vector3(0.0f, 0.0f, 0.0f)),
-		alpha(0.95f)
+		alpha(1.0f),
+		isOpaque(true),
+		camDist(0.0f)
 	{}
 
 	// constructor:
@@ -211,6 +215,7 @@ private:
 	VkQueue presentQueue;
 	VkQueue graphicsQueue;
 	formulas formula;
+	std::vector<std::pair<float, size_t>> distances;
 	void initWindow() {
 		glfwInit();
 		glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
@@ -242,15 +247,16 @@ private:
 				if (!err.empty()) {
 					throw std::runtime_error(err);
 				}
-				// Use an unordered_map instead of a vector for storing unique vertices:
 				std::unordered_map<Vertex, uint32_t, vertHash> uniqueVertices;
 
 				std::vector<Vertex> tempVertices;
 				std::vector<uint32_t> tempIndices;
+				std::vector<float> tempAlphas;
 
 				// reserve memory for vectors:
 				tempVertices.reserve(attrib.vertices.size() / 3);
 				tempIndices.reserve(attrib.vertices.size() / 3);
+				tempAlphas.reserve(attrib.vertices.size() / 3);
 
 				for (const auto& material : materials) {
 					object.texture.diffuseTexturePath = mtl_basepath + material.diffuse_texname; //only diffuse texture is needed for now
@@ -273,12 +279,18 @@ private:
 							attrib.colors[3 * index.vertex_index + 1],
 							attrib.colors[3 * index.vertex_index + 2]
 						};
+						vertex.alpha = 0.7f; //for now until loading alpha values from the textures
+						if (vertex.alpha == 1.0f) {
+							vertex.isOpaque = true;
+						}
+						else {
+							vertex.isOpaque = false;
+						}
 						vertex.normal = {
 							attrib.normals[3 * index.normal_index + 0],
 							attrib.normals[3 * index.normal_index + 1],
 							attrib.normals[3 * index.normal_index + 2]
 						};
-						// Check if vertex is unique and add it to the map if it is:
 						if (uniqueVertices.count(vertex) == 0) {
 							uniqueVertices[vertex] = static_cast<uint32_t>(tempVertices.size());
 							tempVertices.push_back(std::move(vertex));
@@ -1285,15 +1297,27 @@ private:
 			throw std::runtime_error("failed to create graphics pipeline!");
 		}
 		std::cout << "Opaque Graphics Pipeline Created Successfully!" << std::endl;
-		createGraphicsPipelineTransparent(device, vertexInputInfo, inputAssem, vpState, rasterizer, multiSamp, dynamicState, pipelineLayout, renderPass, stages);
+		createGraphicsPipelineTransparent(device, vertexInputInfo, inputAssem, vpState, rasterizer, multiSamp, dynamicState, pipelineLayout, renderPass);
 
 	}
 
 	void createGraphicsPipelineTransparent(VkDevice device,
 		VkPipelineVertexInputStateCreateInfo vertexInputInfo, VkPipelineInputAssemblyStateCreateInfo inputAssem, VkPipelineViewportStateCreateInfo vpState,
 		VkPipelineRasterizationStateCreateInfo rasterizer, VkPipelineMultisampleStateCreateInfo multiSamp,
-		VkPipelineDynamicStateCreateInfo dynamicState, VkPipelineLayout pipelineLayout, VkRenderPass renderPass, VkPipelineShaderStageCreateInfo shaderStages[])
+		VkPipelineDynamicStateCreateInfo dynamicState, VkPipelineLayout pipelineLayout, VkRenderPass renderPass)
 	{
+		VkPipelineShaderStageCreateInfo vertShader{}; //creates a struct for the vertex shader stage info
+		vertShader.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+		vertShader.stage = VK_SHADER_STAGE_VERTEX_BIT;
+		vertShader.module = vertShaderModule; //assign the vertex shader module
+		vertShader.pName = "main";
+		VkPipelineShaderStageCreateInfo fragShader{};
+		fragShader.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+		fragShader.stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+		fragShader.module = fragShaderModule;
+		fragShader.pName = "main";
+		VkPipelineShaderStageCreateInfo stages[] = { vertShader, fragShader }; //create an array of the shader stage structs
+
 		//transparent depth stencil setup
 		VkPipelineDepthStencilStateCreateInfo dStencil{};
 		dStencil.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
@@ -1343,7 +1367,7 @@ private:
 		VkGraphicsPipelineCreateInfo pipelineInf{};
 		pipelineInf.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
 		pipelineInf.stageCount = 2; // Vertex and fragment shaders
-		pipelineInf.pStages = shaderStages;
+		pipelineInf.pStages = stages;
 		pipelineInf.pVertexInputState = &vertexInputInfo;
 		pipelineInf.pInputAssemblyState = &inputAssem;
 		pipelineInf.pViewportState = &vpState;
@@ -1363,7 +1387,16 @@ private:
 		}
 		std::cout << "Transparent Graphics Pipeline Created Successfully!" << std::endl;
 	}
-
+	float calcVertDist(const formulas::Vector3& vertPos, const formulas::Vector3& cameraPos) {
+		formulas::Vector3 distanceVector = vertPos.subtract(cameraPos);
+		return distanceVector.length();
+	}
+	void debugDistances() {
+		std::cout << objects[0].vertices.size() << std::endl;
+		for (int i = 0; i < objects[0].vertices.size(); i++) {
+			std::cout << "Vertex " << i << " distance: " << calcVertDist(objects[0].vertices[i].pos, cam.camPos) << std::endl;
+		}
+	}
 
 	void setupFences() {
 		inFlightFences.resize(swapChainImages.size());
@@ -1512,6 +1545,13 @@ private:
 					std::cerr << "Warning: missing vertex buffer for object " << j + 1 << std::endl;
 					continue;
 				}
+				for (int a = 0; a < objects[j].vertices.size(); a++) {
+					if (!objects[j].vertices[a].isOpaque) {
+						float s = calcVertDist(objects[j].vertices[a].pos, cam.camPos);
+						distances.emplace_back(s, j);
+					}
+				}
+				std::sort(distances.begin(), distances.end());
 
 				VkBuffer vertexBuffersArray[] = { vertBuffers[j] };
 				VkDeviceSize offsets[] = { 0 };
@@ -1675,7 +1715,7 @@ private:
 		}
 		vkDeviceWaitIdle(device);
 	}
-	void handleKeyboardInput(GLFWwindow* window) {
+	void handleKeyboardInput(GLFWwindow* window) { //needs heavy work 
 		float cameraSpeed = 0.001f; // Adjust the speed as needed. on the laptop 0.003f is good
 		float cameraRotationSpeed = 0.05f;
 

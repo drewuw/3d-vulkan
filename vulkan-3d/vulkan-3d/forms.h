@@ -17,6 +17,13 @@ public:
 		Vector3 translate(float tx, float ty, float tz) const {
 			return Vector3(x + tx, y + ty, z + tz);
 		}
+		Vector3 subtract(const Vector3& other) const {
+			return Vector3(x - other.x, y - other.y, z - other.z);
+		}
+		float length() const {
+			return std::sqrt(x * x + y * y + z * z);
+		}
+
 	};
 	struct Vector2 {
 		float x, y;
